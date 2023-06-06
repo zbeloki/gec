@@ -15,19 +15,19 @@ import argparse
 import csv
 import pdb
 
-MAX_SEQ_LEN = 256
+REF_WEIGHT = 0.5
 
-def main(sent_fpath, type_cls_path, span_cls_path, esg_path, ref_fpath, ref_weight, out_fpath):
+device = torch.device(0) if torch.cuda.is_available() else torch.device("cpu")
 
-    device = torch.device(0) if torch.cuda.is_available() else torch.device("cpu")
+def main(sent_fpath, type_cls_path, span_cls_path, esg_path, ref_fpath, out_fpath):
+
     detokenizer = Tokenizer(detokenizer_only=True)
 
     # type classifier
     logging.info("Loading type classifier model")
     type_tokenizer = AutoTokenizer.from_pretrained(type_cls_path)
-    type_model = AutoModelForSequenceClassification.from_pretrained(type_cls_path)
+    type_model = AutoModelForSequenceClassification.from_pretrained(type_cls_path).to(device)
     error_types = list(type_model.config.id2label.values())
-    type_pipe = pipeline('sentiment-analysis', model=type_model, tokenizer=type_tokenizer)
 
     # span classifier
     logging.info("Loading span classifier model")
@@ -59,48 +59,49 @@ def main(sent_fpath, type_cls_path, span_cls_path, esg_path, ref_fpath, ref_weig
             orig_sent = ln.strip()
             sent = orig_sent
             n_errors = get_n_errors(sent)
-            used_error_types = set()
-            for i in range(n_errors):
-                error_type = get_error_type(sent, type_tokenizer, type_model, ref_type_probs, ref_weight)
+            error_types = get_error_types(sent, type_tokenizer, type_model, ref_type_probs, n_errors)
+            for error_type in error_types:
                 span = get_span(sent, error_type, span_tokenizer, span_model)
                 error_text = get_error_text(sent, error_type, span, esg_pipe)
                 sent = sent[:span[0]] + " " + error_text + " " + sent[span[1]:]
-                sent = detokenizer.detokenize(new_sent)
+                sent = detokenizer.detokenize(sent)
+                print(error_type, file=f_types)
             writer.writerow({
                 'source': sent,
                 'target': orig_sent,
             })
-            print(error_type, file=f_types)
-            logging.debug(f"ORIG: {sent}")
-            logging.debug(f"SYNT: {new_sent} <- {error_type}")
+            logging.debug(f"ORIG: {orig_sent}")
+            logging.debug(f"SYNT: {sent} <- {error_type}")
 
 
 def get_n_errors(sent):
-    return 1
+    #n = np.random.choice([1, 2, 3, 4], p=[0.1, 0.25, 0.4, 0.25])
+    return 3
 
-def get_error_type(sent, tokenizer, model, ref_probs, ref_weight):
-    if ref_weight < 1.0:
-        inputs = tokenizer(sent, max_length=MAX_SEQ_LEN, return_tensors='pt', truncation=True, padding=True)
-        with torch.no_grad():
-            output = model(**inputs)
-        sigmoid = lambda x: 1 / (1 + np.exp(-x))
-        probs = sigmoid(output.logits.cpu().numpy())[0]
-        inferred_probs = { model.config.id2label[tid]: probs[tid] for tid in range(len(probs)) }
-    else:
-        # avoid executing type classifier if its output won't be used
-        inferred_probs = { model.config.id2label[tid]: 0.0 for tid in range(len(ref_probs)) }
-    error_type = select_type(inferred_probs, ref_probs, ref_weight)
-    return error_type
+def get_error_types(sent, tokenizer, model, ref_probs, n):
 
-def select_type(inferred_probs, ref_probs, ref_weight):
+    inputs = tokenizer(sent, max_length=utils.MAX_SEQ_LEN, return_tensors='pt', truncation=True, padding=True).to(device)
+    with torch.no_grad():
+        output = model(**inputs)
+    sigmoid = lambda x: 1 / (1 + np.exp(-x))
+    probs = sigmoid(output.logits.cpu().numpy())[0]
+    inferred_probs = { model.config.id2label[tid]: probs[tid] for tid in range(len(probs)) }
+    error_types = select_types(inferred_probs, ref_probs, n)
+    return error_types
+
+def select_types(inferred_probs, ref_probs, n):
     types = ref_probs.keys()
-    probs = { t: inferred_probs[t] * (1-ref_weight) + ref_probs[t] * ref_weight for t in types }
-    probs = { t: probs[t]/sum(probs.values()) for t in types }
-    error_type = np.random.choice(list(probs.keys()), p=list(probs.values()))
-    return error_type
+    error_types = []
+    probs = { t: inferred_probs[t] * (1-REF_WEIGHT) + ref_probs[t] * REF_WEIGHT for t in types }
+    for _ in range(n):
+        probs = { t: probs[t]/sum(probs.values()) for t in types }
+        error_type = np.random.choice(list(probs.keys()), p=list(probs.values()))
+        error_types.append(error_type)
+        probs[error_type] = 0.0
+    return error_types
 
 def get_span(sent, error_type, tokenizer, model):
-    inputs = tokenizer(error_type, sent, max_length=MAX_SEQ_LEN, return_tensors='pt',
+    inputs = tokenizer(error_type, sent, max_length=utils.MAX_SEQ_LEN, return_tensors='pt',
                        truncation='only_second', return_offsets_mapping=True, padding='max_length')
     offset_mapping = inputs.pop('offset_mapping')[0].tolist()
     model_inputs = { col: inputs[col].to(model.device) for col in inputs.keys() }
@@ -125,8 +126,7 @@ if __name__ == '__main__':
     parser.add_argument("SPAN_CLASSIFIER", help='')
     parser.add_argument("ERROR_SPAN_GENERATOR", help='')
     parser.add_argument("REF_M2", help='')
-    parser.add_argument("REF_WEIGHT", type=float, help='')
     parser.add_argument("OUT_CSV", help='')
     args = parser.parse_args()
     
-    main(args.SENTENCES, args.TYPE_CLASSIFIER, args.SPAN_CLASSIFIER, args.ERROR_SPAN_GENERATOR, args.REF_M2, args.REF_WEIGHT, args.OUT_CSV)
+    main(args.SENTENCES, args.TYPE_CLASSIFIER, args.SPAN_CLASSIFIER, args.ERROR_SPAN_GENERATOR, args.REF_M2, args.OUT_CSV)

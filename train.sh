@@ -100,6 +100,6 @@ python3 $TRAIN_SCRIPT \
 	--eval_steps $EVAL_STEPS \
 	--metric_for_best_model $METRIC \
 	--use_fast false \
-	--max_source_length 128 \
-	--max_target_length 128 \
-	--generation_max_length 128
+	--max_source_length 256 \
+	--max_target_length 256 \
+	--generation_max_length 256

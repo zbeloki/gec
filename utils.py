@@ -6,6 +6,7 @@ import numpy as np
 from collections import Counter
 import pdb
 
+MAX_SEQ_LEN = 256
 SEP_TOKEN = "｟SEP｠"
 MASK_TOKEN = "｟MASK｠"
 
