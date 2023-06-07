@@ -11,17 +11,19 @@ import tqdm
 from collections import Counter
 import logging
 logging.basicConfig(level=logging.INFO)
+import math
 import argparse
 import csv
 import pdb
 
 REF_WEIGHT = 0.5
+ERROR_EACH_N_TOKENS = 10
 
 device = torch.device(0) if torch.cuda.is_available() else torch.device("cpu")
 
 def main(sent_fpath, type_cls_path, span_cls_path, esg_path, ref_fpath, out_fpath):
 
-    detokenizer = Tokenizer(detokenizer_only=True)
+    tokenizer = Tokenizer()
 
     # type classifier
     logging.info("Loading type classifier model")
@@ -58,13 +60,15 @@ def main(sent_fpath, type_cls_path, span_cls_path, esg_path, ref_fpath, out_fpat
         for ln in tqdm.tqdm(f_in, total=num_sents):
             orig_sent = ln.strip()
             sent = orig_sent
-            n_errors = get_n_errors(sent)
-            error_types = get_error_types(sent, type_tokenizer, type_model, ref_type_probs, n_errors)
-            for error_type in error_types:
+            n_errors = get_n_errors(sent, tokenizer)
+            used_error_types = set()
+            for _ in range(n_errors):
+                error_type = get_error_type(sent, type_tokenizer, type_model, ref_type_probs, used_error_types)
                 span = get_span(sent, error_type, span_tokenizer, span_model)
                 error_text = get_error_text(sent, error_type, span, esg_pipe)
                 sent = sent[:span[0]] + " " + error_text + " " + sent[span[1]:]
-                sent = detokenizer.detokenize(sent)
+                sent = tokenizer.detokenize(sent)
+                used_error_types.add(error_type)
                 print(error_type, file=f_types)
             writer.writerow({
                 'source': sent,
@@ -74,11 +78,14 @@ def main(sent_fpath, type_cls_path, span_cls_path, esg_path, ref_fpath, out_fpat
             logging.debug(f"SYNT: {sent} <- {error_type}")
 
 
-def get_n_errors(sent):
-    #n = np.random.choice([1, 2, 3, 4], p=[0.1, 0.25, 0.4, 0.25])
-    return 3
+def get_n_errors(sent, tokenizer):
+    MAX_ERRORS = 8
+    tokens = tokenizer.tokenize(sent)
+    n_errors = math.ceil(len(tokens) / ERROR_EACH_N_TOKENS)
+    n_errors = min(n_errors, MAX_ERRORS)
+    return n_errors
 
-def get_error_types(sent, tokenizer, model, ref_probs, n):
+def get_error_type(sent, tokenizer, model, ref_probs, used_types):
 
     inputs = tokenizer(sent, max_length=utils.MAX_SEQ_LEN, return_tensors='pt', truncation=True, padding=True).to(device)
     with torch.no_grad():
@@ -86,19 +93,18 @@ def get_error_types(sent, tokenizer, model, ref_probs, n):
     sigmoid = lambda x: 1 / (1 + np.exp(-x))
     probs = sigmoid(output.logits.cpu().numpy())[0]
     inferred_probs = { model.config.id2label[tid]: probs[tid] for tid in range(len(probs)) }
-    error_types = select_types(inferred_probs, ref_probs, n)
-    return error_types
+    error_type = select_type(inferred_probs, ref_probs, used_types)
+    return error_type
 
-def select_types(inferred_probs, ref_probs, n):
+def select_type(inferred_probs, ref_probs, used_types):
     types = ref_probs.keys()
     error_types = []
     probs = { t: inferred_probs[t] * (1-REF_WEIGHT) + ref_probs[t] * REF_WEIGHT for t in types }
-    for _ in range(n):
-        probs = { t: probs[t]/sum(probs.values()) for t in types }
-        error_type = np.random.choice(list(probs.keys()), p=list(probs.values()))
-        error_types.append(error_type)
+    for error_type in used_types:
         probs[error_type] = 0.0
-    return error_types
+    probs = { t: probs[t]/sum(probs.values()) for t in types }
+    error_type = np.random.choice(list(probs.keys()), p=list(probs.values()))
+    return error_type
 
 def get_span(sent, error_type, tokenizer, model):
     inputs = tokenizer(error_type, sent, max_length=utils.MAX_SEQ_LEN, return_tensors='pt',
