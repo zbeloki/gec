@@ -101,6 +101,8 @@ class M2Entry:
         self._detokenizer = Tokenizer(detokenizer_only=True)
 
     def invert(self, annotator=None):
+        if len(self.annotations()) == 0:
+            return M2Entry(self._sentence[:], [])
         if annotator is None:
             annotator = self.annotators()[0]
         edits = [ edit._asdict() for edit in self.annotations(annotator=annotator) ]
