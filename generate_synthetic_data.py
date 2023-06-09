@@ -120,8 +120,13 @@ def get_span(sent, error_type, tokenizer, model):
 
 def get_error_text(sent, error_type, char_span, pipeline):
     esg_input = utils.to_esg_input_format(sent, error_type, char_span)
-    esg_output = pipeline(esg_input, truncation=True)
-    return esg_output[0]['generated_text'].strip()
+    esg_output = pipeline(esg_input, truncation=True, num_return_sequences=2)
+    orig_text = sent[char_span[0]:char_span[1]]
+    new_text = esg_output[0]['generated_text'].strip()
+    if new_text == orig_text.strip():
+        new_text = esg_output[1]['generated_text'].strip()
+        
+    return new_text
 
 
 if __name__ == '__main__':
