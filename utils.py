@@ -63,7 +63,7 @@ def infer_token_span(start_logits, end_logits, word_ids=None):
 
     if word_ids is not None:
         # avoid selecting only subwords, it must be a full word
-        while to_tok > 0 and word_ids[to_tok] == word_ids[to_tok-1]:
+        while 0 < to_tok < len(word_ids)-1 and word_ids[to_tok] == word_ids[to_tok-1]:
             to_tok += 1
 
     return from_tok, to_tok, score

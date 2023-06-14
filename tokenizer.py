@@ -1,15 +1,22 @@
+import pdb
 
 class Tokenizer:
 
-    def __init__(self, detokenizer_only=False):
+    def __init__(self, detokenizer_only=False, engine='spacy'):
+        self.engine = engine
         if not detokenizer_only:
-            import spacy
-            self.nlp = spacy.load('en', exclude=['tok2vec', 'tagger', 'parser', 'attribute_ruler', 'lemmatizer', 'ner'])
+            if self.engine == 'spacy':
+                import spacy
+                self.nlp = spacy.load('en', exclude=['tok2vec', 'tagger', 'parser', 'attribute_ruler', 'lemmatizer', 'ner'])
         
     def tokenize(self, text):
-        
-        doc = self.nlp(text)
-        tokens = [ tok.text for tok in doc ]
+
+        if self.engine == 'spacy':
+            doc = self.nlp(text)
+            tokens = [ tok.text for tok in doc ]
+        elif self.engine == 'nltk':
+            from nltk.tokenize import word_tokenize
+            tokens = word_tokenize(text)
         
         return tokens
 
