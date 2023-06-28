@@ -9,20 +9,22 @@ import numpy as np
 import argparse
 import pdb
 
-MODEL_ID = "bert-base-cased"
+MODEL_ID_EN = "bert-base-cased"
+MODEL_ID_EU = "orai-nlp/ElhBERTeu"
 MAX_SEQ_LEN = 256
 BATCH_SIZE = 8
 GRAD_ACC = 1
 
-def main(train_m2_fpath, dev_m2_fpath, use_simple_types, out_path):
+def main(train_m2_fpath, dev_m2_fpath, use_simple_types, out_path, lang):
 
-    error_types = m2.error_types(simplified=use_simple_types)
+    error_types = m2.eu_error_types() if lang == 'eu' else m2.error_types(simplified=use_simple_types)
     print(f"Working with {len(error_types)} error types (check --simple-types argument)")
-    
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+
+    model_id = MODEL_ID_EU if lang == 'eu' else MODEL_ID_EN
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
     tokenizer.add_tokens(error_types)
 
-    model = AutoModelForQuestionAnswering.from_pretrained(MODEL_ID)
+    model = AutoModelForQuestionAnswering.from_pretrained(model_id)
     model.resize_token_embeddings(len(tokenizer))
 
     data = DatasetDict({
@@ -131,6 +133,7 @@ if __name__ == '__main__':
     parser.add_argument("DEV_M2", help='M2 file containing the dev data')
     parser.add_argument("OUTPUT_MODEL", help='The model will be created in this path')
     parser.add_argument("--simple-types", action='store_true', help='Use simplified types (24) or original types (54)')
+    parser.add_argument("--lang", default='en', choices=['en', 'eu'], help='Lang for base model: en, eu')
     args = parser.parse_args()
     
-    main(args.TRAIN_M2, args.DEV_M2, args.simple_types, args.OUTPUT_MODEL)
+    main(args.TRAIN_M2, args.DEV_M2, args.simple_types, args.OUTPUT_MODEL, args.lang)

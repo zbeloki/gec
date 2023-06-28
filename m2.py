@@ -32,10 +32,24 @@ CLASS_NAMES = [
     'R:WO',
 ]
 
+CLASS_NAMES_EU = [
+    'R:NOUN',
+    'R:ADITZ', 'M:ADITZ', 'U:ADITZ',
+    'R:DEKL', 'M:DEKL', 'U:DEKL',
+    'R:EGIT-ORD', 'M:EGIT-ORD', 'U:EGIT-ORD', 'UNK:EGIT-ORD',
+    'R:ORT-PUNT', 'M:ORT-PUNT', 'U:ORT-PUNT', 'UNK:ORT-PUNT',
+    'R:BEST', 'M:BEST', 'U:BEST',
+    'R:', 'M:',
+]
+
 def error_types(simplified=False):
     tags = CLASS_NAMES
     if simplified:
         tags = list(set([ simplify_type(tag) for tag in tags ]))
+    return sorted(tags)
+
+def eu_error_types():
+    tags = CLASS_NAMES_EU
     return sorted(tags)
 
 def simplify_type(tag):

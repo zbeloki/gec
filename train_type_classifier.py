@@ -12,8 +12,10 @@ import pdb
 import sys
 import argparse
 
+MODEL_ID_EN = "bert-base-cased"
+MODEL_ID_EU = "orai-nlp/ElhBERTeu"
 
-def main(train_fpath, dev_fpath, use_simple_types, out_path):
+def main(train_fpath, dev_fpath, use_simple_types, out_path, lang):
   
   def load_dataset_from_m2_files(m2_fpaths):
     m2_entries = []
@@ -33,7 +35,7 @@ def main(train_fpath, dev_fpath, use_simple_types, out_path):
       'test': load_dataset_from_m2_files([dev_fpath]),
   })
 
-  error_types = m2.error_types(simplified=use_simple_types)
+  error_types = m2.eu_error_types() if lang == 'eu' else m2.error_types(simplified=use_simple_types)
 
   mlb = MultiLabelBinarizer()
   mlb.fit([error_types])
@@ -47,11 +49,10 @@ def main(train_fpath, dev_fpath, use_simple_types, out_path):
   print(f"Number of types: {len(error_types)}")
   print(f"Sentences in train set: {len(dss['train'])}")
 
-  MODEL_ID = "bert-base-cased"
+  model_id = MODEL_ID_EU if lang == 'eu' else MODEL_ID_EN
+  tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-  tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-
-  tokenize = lambda batch: tokenizer(batch['sentence'], truncation=True, padding=True)
+  tokenize = lambda batch: tokenizer(batch['sentence'], truncation=True, padding=True, max_length=256)
   dss_tok = dss.map(tokenize, batched=True, batch_size=None)
 
   BATCH_SIZE = 32
@@ -61,7 +62,7 @@ def main(train_fpath, dev_fpath, use_simple_types, out_path):
 
   def model_init():
     id2label = { i:mlb.classes_[i] for i in range(len(mlb.classes_)) }
-    model = AutoModelForSequenceClassification.from_pretrained(MODEL_ID, id2label=id2label)
+    model = AutoModelForSequenceClassification.from_pretrained(model_id, id2label=id2label)
     model.config.problem_type = "multi_label_classification"
     return model
 
@@ -119,6 +120,7 @@ if __name__ == '__main__':
     parser.add_argument("DEV_M2", help='M2 file containing the dev data')
     parser.add_argument("OUTPUT_MODEL", help='The model will be created in this path')
     parser.add_argument("--simple-types", action='store_true', help='Use simplified types (24) or original types (54)')
+    parser.add_argument("--lang", default='en', choices=['en', 'eu'], help='Lang for base model: en, eu')
     args = parser.parse_args()
     
-    main(args.TRAIN_M2, args.DEV_M2, args.simple_types, args.OUTPUT_MODEL)
+    main(args.TRAIN_M2, args.DEV_M2, args.simple_types, args.OUTPUT_MODEL, args.lang)
