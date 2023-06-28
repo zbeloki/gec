@@ -11,6 +11,7 @@ import tqdm
 from collections import Counter
 import logging
 logging.basicConfig(level=logging.INFO)
+import random
 import math
 import argparse
 import csv
@@ -18,10 +19,16 @@ import pdb
 
 REF_WEIGHT = 0.5
 ERROR_EACH_N_TOKENS = 10
+SEED = 65
 
 device = torch.device(0) if torch.cuda.is_available() else torch.device("cpu")
 
 def main(sent_fpath, type_cls_path, span_cls_path, esg_path, ref_fpath, out_fpath):
+
+    # reproducibility
+    torch.manual_seed(SEED)
+    random.seed(SEED)
+    np.random.seed(SEED)
 
     tokenizer = Tokenizer()
 

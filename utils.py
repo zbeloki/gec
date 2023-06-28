@@ -73,9 +73,12 @@ def infer_char_span(start_logits, end_logits, offset_mapping, word_ids):
 
     from_tok, to_tok, score = infer_token_span(start_logits, end_logits, word_ids)
 
-    from_char = offset_mapping[from_tok][0]
-    to_char = offset_mapping[to_tok][0]
-    
+    try:
+        from_char = offset_mapping[from_tok][0]
+        to_char = offset_mapping[to_tok][0]
+    except Exception:
+        from_char, to_char = 0, 0
+        
     return from_char, to_char, score
 
 
