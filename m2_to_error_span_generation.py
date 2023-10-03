@@ -4,18 +4,22 @@ import m2
 import argparse
 import pdb
 
-def main(train_m2_fpath, use_simple_types, out_fpath):
+def main(train_m2_fpath, use_simple_types, no_spans, out_fpath):
 
     error_types = m2.error_types(simplified=use_simple_types)
     print(f"Working with {len(error_types)} error types (check --simple-types argument)")
 
-    train = utils.m2_to_dataset(train_m2_fpath, use_simple_types=use_simple_types, invert=True)
+    train = utils.m2_to_dataset(
+        train_m2_fpath,
+        use_simple_types=use_simple_types,
+        no_spans=no_spans,
+        invert=True)
 
     def preprocess(examples):
         examples['source'] = utils.to_esg_input_format(
             examples['sentence'],
             examples['error_type'],
-            examples['span']
+            None if no_spans else examples['span'],
         )
         examples['target'] = examples['target_span']
         return examples
@@ -30,7 +34,8 @@ if __name__ == '__main__':
     parser.add_argument("TRAIN_M2", help='M2 file containing the training data')
     parser.add_argument("OUT_TSV", help='Output file containing the data in the following format: "type SEP correct_span SEP masked_context \t error_span')
     parser.add_argument("--simple-types", action='store_true', help='Use simplified types (24) or original types (54)')
+    parser.add_argument("--no_spans", action='store_true', help='Decode the entire sentence instead of a given span')
     args = parser.parse_args()
     
-    main(args.TRAIN_M2, args.simple_types, args.OUT_TSV)
+    main(args.TRAIN_M2, args.simple_types, args.no_spans, args.OUT_TSV)
 

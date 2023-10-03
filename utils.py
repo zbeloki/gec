@@ -10,7 +10,7 @@ MAX_SEQ_LEN = 256
 SEP_TOKEN = "｟SEP｠"
 MASK_TOKEN = "｟MASK｠"
 
-def m2_to_dataset(m2_fpath, use_simple_types=False, invert=False):
+def m2_to_dataset(m2_fpath, use_simple_types=False, no_spans=False, invert=False):
     
     sentences = []
     types = []
@@ -22,21 +22,29 @@ def m2_to_dataset(m2_fpath, use_simple_types=False, invert=False):
             if invert:
                 entry = entry.invert()
             for edit in entry.annotations(ignore_unk=True, ignore_empty=True):
-                char_span = entry.to_char_span(edit, detokenized=True)
+                if no_spans:
+                    # the entire sentence is the span
+                    char_span = (0, len(entry.original()))
+                else:
+                    char_span = entry.to_char_span(edit, detokenized=True)
                 error_type = edit.error_type
                 if use_simple_types:
                     error_type = m2.simplify_type(error_type)
                 sentences.append(entry.original())
                 types.append(error_type)
                 spans.append(char_span)
-                target_spans.append(edit.corrections[0])
+                if no_spans:
+                    target_spans.append(entry.apply_annotations([edit]))
+                else:
+                    target_spans.append(edit.corrections[0])
 
-    return Dataset.from_dict({
+    data = {
         'sentence': sentences,
         'error_type': types,
         'span': spans,
         'target_span': target_spans,
-    })
+    }   
+    return Dataset.from_dict(data)
 
 
 def infer_token_span(start_logits, end_logits, word_ids=None):

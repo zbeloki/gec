@@ -14,6 +14,7 @@ Optional environment variables:
 - EPOCHS
 - LR
 - EVAL_STEPS
+- SEED
 '
 
 # Positional arguments
@@ -42,6 +43,7 @@ fi
 DEF_INPUT_MODEL="facebook/bart-base"
 DEF_BATCH_SIZE=16
 DEF_EPOCHS=3
+DEF_SEED=42
 
 if [ -z ${INPUT_MODEL} ]; then
     INPUT_MODEL=$DEF_INPUT_MODEL
@@ -51,6 +53,9 @@ if [ -z ${BATCH_SIZE} ]; then
 fi
 if [ -z ${EPOCHS} ]; then
     EPOCHS=$DEF_EPOCHS
+fi
+if [ -z ${SEED} ]; then
+    SEED=$DEF_SEED
 fi
 
 LOAD_BEST=True
@@ -102,4 +107,5 @@ python3 $TRAIN_SCRIPT \
 	--use_fast false \
 	--max_source_length 256 \
 	--max_target_length 256 \
-	--generation_max_length 256
+	--generation_max_length 256 \
+	--seed $SEED
