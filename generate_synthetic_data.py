@@ -20,6 +20,7 @@ import pdb
 REF_WEIGHT = 0.5
 ERROR_EACH_N_TOKENS = 10
 DEF_SEED = 42
+BATCH_SIZE = 16
 
 device = torch.device(0) if torch.cuda.is_available() else torch.device("cpu")
 
@@ -73,38 +74,56 @@ def main(sent_fpath, type_cls_path, rnd_types, span_cls_path, esg_path, ref_fpat
     ref_type_probs = utils.load_type_rates(ref_fpath, use_simple_types)
         
     logging.info("Generating synthetic data")
-    num_sents = sum(1 for ln in open(sent_fpath,'r'))
-    with open(sent_fpath, 'r') as f_in, \
-         open(out_fpath, 'w') as f_out, \
+    sents = [ ln.strip() for ln in open(sent_fpath, 'r') if 3 < len(ln.strip().split()) < 50 ]
+    sents.sort(key=lambda s: len(s.split()), reverse=True)
+    num_sents = len(sents)
+    with open(out_fpath, 'w') as f_out, \
          open(out_fpath+'.types.txt', 'w') as f_types:
         writer = csv.DictWriter(f_out, fieldnames=['source', 'target'])
         writer.writeheader()
-        for ln in tqdm.tqdm(f_in, total=num_sents):
-            orig_sent = ln.strip()
-            sent = orig_sent
-            n_errors = get_n_errors(sent, tokenizer) if not single_error else 1
-            used_error_types = set()
+        for batch in tqdm.tqdm(SentenceBatches(sents, BATCH_SIZE), total=math.ceil(num_sents/BATCH_SIZE)):
+            orig_sents = batch
+            sents = [ s for s in orig_sents ]
+            n_errors = get_n_errors(sents[0], tokenizer) if not single_error else 1
+            used_error_types = [ set() for _ in range(BATCH_SIZE) ]
             for _ in range(n_errors):
                 if rnd_types:
-                    error_type = random.sample(error_types, 1)[0]
+                    error_type = random.sample(error_types, BATCH_SIZE)
                 else:
-                    error_type = get_error_type(sent, type_tokenizer, type_model, ref_type_probs, used_error_types)
+                    error_type = get_error_type(sents, type_tokenizer, type_model, ref_type_probs, used_error_types)
                 if span_based_esg:
-                    span = get_span(sent, error_type, span_tokenizer, span_model)
+                    span = get_span(sents, error_type, span_tokenizer, span_model)
                 else:
-                    span = (0, len(sent))
-                error_text = get_error_text(sent, error_type, span, esg_pipe)
-                sent = sent[:span[0]] + " " + error_text + " " + sent[span[1]:]
-                sent = tokenizer.detokenize(sent)
-                used_error_types.add(error_type)
-                print(error_type, file=f_types)
-            writer.writerow({
-                'source': sent,
-                'target': orig_sent,
-            })
-            logging.debug(f"ORIG: {orig_sent}")
-            logging.debug(f"SYNT: {sent} <- {error_type}")
+                    span = [ (0, len(sent)) for sent in sents ]
+                error_text = get_error_text(sents, error_type, span, esg_pipe)
+                sents = [ (sent[:span[i][0]] + " " + error_text[i] + " " + sent[span[i][1]:]) for i, sent in enumerate(sents) ]
+                sents = [ tokenizer.detokenize(sent) for sent in sents ]
+                for i in range(len(used_error_types)):
+                    used_error_types[i].add(error_type[i])
+                    print(error_type[i], file=f_types)
+            for i in range(len(sents)):
+                writer.writerow({
+                    'source': sents[i],
+                    'target': orig_sents[i],
+                })
+                logging.debug(f"ORIG: {orig_sents[i]}")
+                logging.debug(f"SYNT: {sents[i]} <- {error_type[i]}")
 
+
+class SentenceBatches:
+    def __init__(self, sents, size):
+        self.sents = sents
+        self.size = size
+        self.i = 0
+    def __iter__(self):
+        self.i = 0
+        return self
+    def __next__(self):
+        if self.i*self.size >= len(self.sents):
+            raise StopIteration
+        batch = self.sents[self.i*self.size : (self.i+1)*self.size]
+        self.i += 1
+        return batch
 
 def get_n_errors(sent, tokenizer):
     MAX_ERRORS = 8
@@ -113,16 +132,18 @@ def get_n_errors(sent, tokenizer):
     n_errors = min(n_errors, MAX_ERRORS)
     return n_errors
 
-def get_error_type(sent, tokenizer, model, ref_probs, used_types):
-
-    inputs = tokenizer(sent, max_length=utils.MAX_SEQ_LEN, return_tensors='pt', truncation=True, padding=True).to(device)
+def get_error_type(sents, tokenizer, model, ref_probs, used_types):
+    inputs = tokenizer(sents, max_length=utils.MAX_SEQ_LEN, return_tensors='pt', truncation=True, padding=True).to(device)
     with torch.no_grad():
         output = model(**inputs)
     sigmoid = lambda x: 1 / (1 + np.exp(-x))
-    probs = sigmoid(output.logits.cpu().numpy())[0]
-    inferred_probs = { model.config.id2label[tid]: probs[tid] for tid in range(len(probs)) }
-    error_type = select_type(inferred_probs, ref_probs, used_types)
-    return error_type
+    probs = sigmoid(output.logits.cpu().numpy())
+    error_types = []
+    for i in range(len(probs)):
+        inferred_probs = { model.config.id2label[tid]: probs[i][tid] for tid in range(len(probs[i])) }
+        error_type = select_type(inferred_probs, ref_probs, used_types[i])
+        error_types.append(error_type)
+    return error_types
 
 def select_type(inferred_probs, ref_probs, used_types):
     types = ref_probs.keys()
@@ -134,27 +155,32 @@ def select_type(inferred_probs, ref_probs, used_types):
     error_type = np.random.choice(list(probs.keys()), p=list(probs.values()))
     return error_type
 
-def get_span(sent, error_type, tokenizer, model):
-    inputs = tokenizer(error_type, sent, max_length=utils.MAX_SEQ_LEN, return_tensors='pt',
+def get_span(sents, error_types, tokenizer, model):
+    inputs = tokenizer(error_types, sents, max_length=utils.MAX_SEQ_LEN, return_tensors='pt',
                        truncation='only_second', return_offsets_mapping=True, padding='max_length')
-    offset_mapping = inputs.pop('offset_mapping')[0].tolist()
+    offset_mappings = inputs.pop('offset_mapping').tolist()
     model_inputs = { col: inputs[col].to(model.device) for col in inputs.keys() }
     with torch.no_grad():
         outputs = model(**model_inputs)
-    start_logits = outputs.start_logits[0].cpu().numpy()
-    end_logits = outputs.end_logits[0].cpu().numpy()
-    span = utils.infer_char_span(start_logits, end_logits, offset_mapping, inputs.word_ids())
-    return span[0], span[1]
+    batch_start_logits = outputs.start_logits.cpu().numpy()
+    batch_end_logits = outputs.end_logits.cpu().numpy()
+    spans = []
+    for i in range(len(batch_start_logits)):
+        span = utils.infer_char_span(batch_start_logits[i], batch_end_logits[i], offset_mappings[i], inputs.word_ids(i))
+        spans.append(span)
+    return [ (span[0], span[1]) for span in spans ]
 
-def get_error_text(sent, error_type, char_span, pipeline):
-    esg_input = utils.to_esg_input_format(sent, error_type, char_span)
-    esg_output = pipeline(esg_input, truncation=True, num_return_sequences=2)
-    orig_text = sent[char_span[0]:char_span[1]]
-    new_text = esg_output[0]['generated_text'].strip()
-    if new_text == orig_text.strip():
-        new_text = esg_output[1]['generated_text'].strip()
-        
-    return new_text
+def get_error_text(sents, error_types, char_spans, pipeline):
+    esg_inputs = [ utils.to_esg_input_format(sents[i], error_types[i], char_spans[i]) for i in range(len(sents)) ]
+    esg_output = pipeline(esg_inputs, truncation=True, batch_size=BATCH_SIZE, num_return_sequences=2)
+    error_texts = []
+    for i in range(len(sents)):
+        orig_text = sents[i][char_spans[i][0]:char_spans[i][1]]
+        new_text = esg_output[i][0]['generated_text'].strip()
+        if new_text == orig_text.strip():
+            new_text = esg_output[i][1]['generated_text'].strip()
+        error_texts.append(new_text)
+    return error_texts
 
 
 if __name__ == '__main__':
