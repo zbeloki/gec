@@ -109,3 +109,6 @@ python3 $TRAIN_SCRIPT \
 	--max_target_length 256 \
 	--generation_max_length 256 \
 	--seed $SEED
+
+# Predict Wi test
+bash script/predict_wi_test.sh $MODEL_OUTPUT
