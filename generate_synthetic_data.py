@@ -20,11 +20,13 @@ import pdb
 REF_WEIGHT = 0.5
 ERROR_EACH_N_TOKENS = 10
 DEF_SEED = 42
-BATCH_SIZE = 16
+BATCH_SIZE = 32
+SOURCE_MIN_TOKENS = 4
+SOURCE_MAX_TOKENS = 35
 
 device = torch.device(0) if torch.cuda.is_available() else torch.device("cpu")
 
-def main(sent_fpath, type_cls_path, rnd_types, span_cls_path, esg_path, ref_fpath, seed, single_error, out_fpath):
+def main(sent_fpath, type_cls_path, rnd_types, span_cls_path, esg_path, decoding_params, ref_fpath, seed, single_error, out_fpath):
 
     # reproducibility
     torch.manual_seed(seed)
@@ -32,6 +34,7 @@ def main(sent_fpath, type_cls_path, rnd_types, span_cls_path, esg_path, ref_fpat
     np.random.seed(seed)
     logging.info(f"Using seed: {seed}")
 
+    logging.info(f"Decoding parameters: {decoding_params}")
     if single_error:
         logging.info("Forcing to create a single error on each example")
         
@@ -74,7 +77,7 @@ def main(sent_fpath, type_cls_path, rnd_types, span_cls_path, esg_path, ref_fpat
     ref_type_probs = utils.load_type_rates(ref_fpath, use_simple_types)
         
     logging.info("Generating synthetic data")
-    sents = [ ln.strip() for ln in open(sent_fpath, 'r') if 3 < len(ln.strip().split()) < 50 ]
+    sents = [ ln.strip() for ln in open(sent_fpath, 'r') if SOURCE_MIN_TOKENS <= len(ln.strip().split()) <= SOURCE_MAX_TOKENS ]
     sents.sort(key=lambda s: len(s.split()), reverse=True)
     num_sents = len(sents)
     with open(out_fpath, 'w') as f_out, \
@@ -95,10 +98,10 @@ def main(sent_fpath, type_cls_path, rnd_types, span_cls_path, esg_path, ref_fpat
                     span = get_span(sents, error_type, span_tokenizer, span_model)
                 else:
                     span = [ (0, len(sent)) for sent in sents ]
-                error_text = get_error_text(sents, error_type, span, esg_pipe)
+                error_text = get_error_text(sents, error_type, span, esg_pipe, decoding_params)
                 sents = [ (sent[:span[i][0]] + " " + error_text[i] + " " + sent[span[i][1]:]) for i, sent in enumerate(sents) ]
                 sents = [ tokenizer.detokenize(sent) for sent in sents ]
-                for i in range(len(used_error_types)):
+                for i in range(len(sents)):
                     used_error_types[i].add(error_type[i])
                     print(error_type[i], file=f_types)
             for i in range(len(sents)):
@@ -170,14 +173,17 @@ def get_span(sents, error_types, tokenizer, model):
         spans.append(span)
     return [ (span[0], span[1]) for span in spans ]
 
-def get_error_text(sents, error_types, char_spans, pipeline):
+def get_error_text(sents, error_types, char_spans, pipeline, decoding_params):
     esg_inputs = [ utils.to_esg_input_format(sents[i], error_types[i], char_spans[i]) for i in range(len(sents)) ]
-    esg_output = pipeline(esg_inputs, truncation=True, batch_size=BATCH_SIZE, num_return_sequences=2)
+    esg_output = pipeline(esg_inputs, truncation=True, batch_size=BATCH_SIZE, **decoding_params)
     error_texts = []
     for i in range(len(sents)):
         orig_text = sents[i][char_spans[i][0]:char_spans[i][1]]
-        new_text = esg_output[i][0]['generated_text'].strip()
-        if new_text == orig_text.strip():
+        esg_output_i = esg_output[i]
+        if decoding_params['num_return_sequences'] > 1:
+            esg_output_i = esg_output_i[0]
+        new_text = esg_output_i['generated_text'].strip()
+        if new_text == orig_text.strip() and decoding_params['num_return_sequences'] > 1:
             new_text = esg_output[i][1]['generated_text'].strip()
         error_texts.append(new_text)
     return error_texts
@@ -191,10 +197,30 @@ if __name__ == '__main__':
     parser.add_argument("--type_classifier", required=True, help='')
     parser.add_argument("--random_types", action='store_true', help='If True, type_classifier is only used to collect the set of error types, but they are randomly picked for each example')
     parser.add_argument("--span_classifier", help='')
+    parser.add_argument("--num_beams", type=int, default=2, help='')
+    parser.add_argument("--top_k", type=int, default=None, help='')
+    parser.add_argument("--top_p", type=float, default=None, help='')
+    parser.add_argument("--temperature", type=float, default=1.0, help='')
     parser.add_argument("--ref_m2", required=True, help='')
     parser.add_argument("--seed", type=int, default=DEF_SEED, help='')
     parser.add_argument("--force_single_error", action='store_true', help='')
     parser.add_argument("--out", required=True, help='Output CSV file')
     args = parser.parse_args()
+
+    decoding_params = {
+        'num_beams': args.num_beams,
+        'do_sample': False,
+        'num_return_sequences': 1,
+    }
+    if args.top_k is not None:
+        decoding_params['do_sample'] = True
+        decoding_params['top_k'] = args.top_k
+        decoding_params['temperature'] = args.temperature
+    if args.top_p is not None:
+        decoding_params['do_sample'] = True
+        decoding_params['top_p'] = args.top_p
+        decoding_params['temperature'] = args.temperature
+    if decoding_params['num_beams'] > 1 or decoding_params['do_sample'] is True:
+        decoding_params['num_return_sequences'] = 2
     
-    main(args.sentences, args.type_classifier, args.random_types, args.span_classifier, args.esg_model, args.ref_m2, args.seed, args.force_single_error, args.out)
+    main(args.sentences, args.type_classifier, args.random_types, args.span_classifier, args.esg_model, decoding_params, args.ref_m2, args.seed, args.force_single_error, args.out)
