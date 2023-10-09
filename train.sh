@@ -91,6 +91,7 @@ python3 $TRAIN_SCRIPT \
 	--overwrite_output_dir \
 	--do_train \
 	--train_file $TRAIN_FILE \
+	--shuffle_train_dataset \
 	--do_eval \
 	--validation_file $DEV \
 	--gradient_accumulation_steps 2 \
