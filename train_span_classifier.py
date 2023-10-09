@@ -1,3 +1,4 @@
+
 import utils
 import m2
 
@@ -6,6 +7,7 @@ from transformers import AutoTokenizer, TrainingArguments, Trainer, AutoModelFor
 from datasets import Dataset, DatasetDict
 import numpy as np
 
+import logging
 import argparse
 import pdb
 
@@ -14,6 +16,7 @@ MODEL_ID_EU = "orai-nlp/ElhBERTeu"
 MAX_SEQ_LEN = 256
 BATCH_SIZE = 8
 GRAD_ACC = 1
+N_TRIALS = 50
 
 def main(train_m2_fpath, dev_m2_fpath, use_simple_types, out_path, lang):
 
@@ -24,8 +27,10 @@ def main(train_m2_fpath, dev_m2_fpath, use_simple_types, out_path, lang):
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     tokenizer.add_tokens(error_types)
 
-    model = AutoModelForQuestionAnswering.from_pretrained(model_id)
-    model.resize_token_embeddings(len(tokenizer))
+    def model_init(trial):
+        model = AutoModelForQuestionAnswering.from_pretrained(model_id)
+        model.resize_token_embeddings(len(tokenizer))
+        return model
 
     data = DatasetDict({
         'train': utils.m2_to_dataset(train_m2_fpath, use_simple_types=use_simple_types, invert=True),
@@ -50,7 +55,8 @@ def main(train_m2_fpath, dev_m2_fpath, use_simple_types, out_path, lang):
 
             if pred_span[0] == true_span[0] and pred_span[1] == true_span[1]:
                 match += 1
-            if pred_span[0] < true_span[1] and pred_span[1] > true_span[0]:
+                overlap += 1
+            elif pred_span[0] < true_span[1] and pred_span[1] > true_span[0]:
                 overlap += 1
             if pred_span[2] == 0.0:
                 manual += 1
@@ -73,14 +79,38 @@ def main(train_m2_fpath, dev_m2_fpath, use_simple_types, out_path, lang):
         save_strategy="epoch",
         #save_steps=100,
         save_total_limit=1,
-        load_best_model_at_end=True,
+        #load_best_model_at_end=True,
         disable_tqdm=False,
         log_level='error',
         fp16=True,
         logging_steps=100,
     )
     trainer = Trainer(
-        model=model,
+        model=None,
+        model_init=model_init,
+        args=args,
+        train_dataset=data['train'],
+        eval_dataset=data['dev'],
+        tokenizer=tokenizer,
+        compute_metrics=compute_metrics,
+    )
+
+    best_run = trainer.hyperparameter_search(n_trials=N_TRIALS,
+                                             direction='maximize',
+                                             hp_space=optuna_hp_space,
+                                             compute_objective=lambda m: m['eval_overlap'])
+
+    print(f"Best run: {best_run}")
+    args.num_train_epochs = best_run.hyperparameters['num_train_epochs']
+    args.per_device_train_batch_size = best_run.hyperparameters['per_device_train_batch_size']
+    args.learning_rate = best_run.hyperparameters['learning_rate']
+    args.weight_decay = best_run.hyperparameters['weight_decay']
+    args.seed = best_run.hyperparameters['seed']
+    print(f"Using arguments: {args}")
+    
+    trainer = Trainer(
+        model=None,
+        model_init=model_init,
         args=args,
         train_dataset=data['train'],
         eval_dataset=data['dev'],
@@ -90,6 +120,16 @@ def main(train_m2_fpath, dev_m2_fpath, use_simple_types, out_path, lang):
     trainer.train()
 
     trainer.save_model()
+
+
+def optuna_hp_space(trial):
+    return {
+        'num_train_epochs': trial.suggest_int("num_train_epochs", 1, 6),
+        'weight_decay': trial.suggest_float("weight_decay", 1e-4, 1e-2, log=True),
+        'learning_rate': trial.suggest_float("learning_rate", 1e-6, 1e-4, log=True),
+        'seed': trial.suggest_categorical("seed", range(10)),
+        'per_device_train_batch_size': trial.suggest_categorical("per_device_train_batch_size", [8, 16, 32, 64, 128]),
+    }
 
 
 def preprocess_dataset(examples, tokenizer):
