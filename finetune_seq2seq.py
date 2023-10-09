@@ -169,6 +169,9 @@ class DataTrainingArguments:
     overwrite_cache: bool = field(
         default=False, metadata={"help": "Overwrite the cached training and evaluation sets"}
     )
+    shuffle_train_dataset: bool = field(
+        default=False, metadata={"help": "Whether to shuffle the train dataset or not."}
+    )
     preprocessing_num_workers: Optional[int] = field(
         default=None,
         metadata={"help": "The number of processes to use for the preprocessing."},
@@ -574,6 +577,9 @@ def main():
         if "train" not in raw_datasets:
             raise ValueError("--do_train requires a train dataset")
         train_dataset = raw_datasets["train"]
+        if data_args.shuffle_train_dataset:
+            logger.info("Shuffling the training dataset")
+            train_dataset = train_dataset.shuffle(seed=42)
         if data_args.max_train_samples is not None:
             max_train_samples = min(len(train_dataset), data_args.max_train_samples)
             train_dataset = train_dataset.select(range(max_train_samples))
